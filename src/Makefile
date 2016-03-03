@@ -1,5 +1,5 @@
 CPPFLAGS = -I../include
-CFLAGS = -Wall
+CFLAGS = -g -Wall
 LDFLAGS =  -lpthread
 #CC = gcc
 CC = g++

@@ -8,7 +8,7 @@
 class _hander
 {
 	public:
-		virtual void* process()const=0;
+		virtual void* process()=0;
 };
 
 template<typename T>
@@ -117,9 +117,11 @@ bool thread_poll<T>::append_request(T* request)
 	work_queue.push_back(request);
 	pthread_mutex_unlock(&mutex);
 
+
 	if(work_queue.size() > 0 && work_queue.size() <= th_number)
 	{
-		pthread_cond_broadcast(&cond);
+		//pthread_cond_broadcast(&cond);
+		pthread_cond_signal(&cond);
 	}
 	return true;
 }
@@ -140,9 +142,10 @@ void thread_poll<T>::run()
 	{
 		if(work_queue.size() <=0)	
 		{
-			pthread_mutex_lock(&mutex);
-			pthread_cond_wait(&cond,&mutex);
-			pthread_mutex_unlock(&mutex);
+		pthread_mutex_lock(&mutex);
+		pthread_cond_wait(&cond,&mutex);
+		pthread_mutex_unlock(&mutex);
+			continue;
 		}
 		pthread_mutex_lock(&mutex);
 		T *request = work_queue.front();
