@@ -41,7 +41,8 @@ class http_hander : public _hander
 			CONNECTION, COOKIE, CONTENT_LENGTH, CONTENT_TYPE, DATE, 
 			EXPECT, FROM, HOST, IF_MATCH, IF_MODIFIED_SINCE, IF_NONE_MATCH, 
 			IF_RANGE, IF_UNMODIFIED_SINCE, MAX_FORWARDS, PRAGMA, 
-			PROXY_AUTHORIZATION, RANGE, TE, UPGRADE, USER_AGENT, VIA, WARING};
+			PROXY_AUTHORIZATION, RANGE, REFERER, TE, UPGRADE, USER_AGENT, 
+			VIA, WARING};
 
 	public:
 		/*constructor*/
@@ -112,6 +113,7 @@ class http_hander : public _hander
 		char* http_version;
 
 		std::map<REQUEST_HEADERS, char*> map_request_headers;
+		std::map<char*, char*> map_request_params;
 		
 		char read_buffer[READ_BUFFER_SIZE];
 };
