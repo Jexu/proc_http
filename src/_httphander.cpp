@@ -1,8 +1,22 @@
 #include "_httphander.h"
 
+const char* ok_200_title = "OK";
+const char* error_400_title = "Bad Request";
+const char* error_400_form = "Your request has bad syntax or is inherently impossible to satisfy.\n";
+const char* error_403_title = "Forbidden";
+const char* error_403_form = "You dont hava permission to get file from this server.\n";
+const char* error_404_title = "Not Found";
+const char* error_404_form = "The request file was not found in this server.\n";
+const char* error_500_title = "Internet Error";
+const char* error_500_form = "There was an unusual problem serving the requested file.\n";
+
+
+
 int http_hander::epollfd = -1;
 
 int http_hander::user_counter = 0;
+
+const char* http_hander::ROOT_DOC_DIR = "/var/www/html";
 
 
 http_hander::http_hander()
@@ -62,6 +76,8 @@ bool http_hander::write()
 	return true;
 }
 
+/*private function()*/
+
 void http_hander::_split(const std::string *src,const char* sp,
 		std::vector<std::string>* splits)const
 {
@@ -101,21 +117,22 @@ void http_hander::_split(const char *src,const char* sp,
 	_split(&_src,sp,splits);
 }
 
-
-/*private function()*/
-
 void http_hander::init()
 {
 	this->idel_r_buffer_idx = 0;
+	this->idel_w_buffer_idx = 0;
 	this->cur_start_line_idx = 0;
 	this->checked_line_idx = 0;
 	this->checked_status = CHECK_STATUS_REQUESTLINE;
-	request_method = GET;
-	request_url = NULL;
-	http_version = NULL;
-	map_request_headers.clear();
-	map_request_params.clear();
+	this->request_method = GET;
+	this->request_url = NULL;
+	this->http_version = NULL;
+	this->request_file_mmap_addr = NULL;
+	this->map_request_headers.clear();
+	this->map_request_params.clear();
 	memset(read_buffer,'\0',READ_BUFFER_SIZE);
+	memset(write_buffer,'\0',WRITE_BUFFER_SIZE);
+	memset(real_file_dir,'\0',MAX_FILENAME_LEN);
 }
 
 http_hander::HTTP_CODE http_hander::process_request()
@@ -691,14 +708,163 @@ char* http_hander::get_line()
 
 http_hander::HTTP_CODE http_hander::do_request()
 {
-	return NO_REQUEST;
+	strcpy(real_file_dir, ROOT_DOC_DIR);
+	int len = strlen(real_file_dir);
+	strncpy(real_file_dir + len, this->request_url, MAX_FILENAME_LEN - len -1);
+	if(stat(real_file_dir, &request_file_stat) < 0)
+	{
+		return NO_RESOURCE;
+	}
+	if(!(request_file_stat.st_mode & S_IROTH))
+	{
+		return FORBIDDEN_REQUEST;
+	}
+	if(request_file_stat.st_mode & S_IFDIR)
+	{
+		return BAD_REQUEST;
+	}
+	int fd = open(real_file_dir, O_RDONLY);
+	request_file_mmap_addr = (char*)mmap(0, request_file_stat.st_size, 
+			PROT_READ, MAP_PRIVATE, fd, 0);
+	close(fd);
+	return FILE_REQUEST;
 }
 
-bool http_hander::process_response()
+bool http_hander::process_response(HTTP_CODE resp_code)
 {
+	switch(resp_code)
+	{
+		case INTERNAL_ERROR:
+			{
+				add_response_line(500, error_500_title);
+				add_response_header(strlen(error_500_title));
+				if(!add_response_content(error_500_title))
+				{
+					return false;
+				}
+				break;
+			}
+		case BAD_REQUEST:
+			{
+				add_response_line(400, error_400_title);
+				add_response_header(strlen(error_400_form));
+				if(!add_response_content(error_400_form))
+				{
+					return false;
+				}
+				break;
+			}
+		case NO_RESOURCE:
+			{
+				add_response_line(404, error_404_title);
+				add_response_header(strlen(error_404_form));
+				if(!add_response_content(error_404_form))
+				{
+					return false;
+				}
+				break;
+			}
+		case FORBIDDEN_REQUEST:
+			{
+				add_response_line(403, error_403_title);
+				add_response_header(strlen(error_403_form));
+				if(!add_response_content(error_403_form))
+				{
+					return false;
+				}
+				break;
+			}
+		case FILE_REQUEST:
+			{
+				add_response_line(200, ok_200_title);
+				if(request_file_stat.st_size > 0)
+				{
+					iov[0].iov_base = write_buffer;
+					iov[0].iov_len = idel_w_buffer_idx;
+					iov[1].iov_base = request_file_mmap_addr;
+					iov[0].iov_len = request_file_stat.st_size; 
+					iovcnt = 2;
+					return true;
+				}
+				else
+				{
+					const char* ok_char = "<html><body>hello world</body></html>";
+					add_response_header(strlen(ok_char));
+					if(!add_response_content(ok_char))
+					{
+						return false;
+					}
+				}
+				break;
+			}
+		default :
+			{
+				return false;
+				break;
+			}
+	}
+	iov[0].iov_base = write_buffer;
+	iov[0].iov_len = idel_w_buffer_idx;
+	iovcnt = 1;
 	return true;
 }
 
+bool http_hander::add_response_line(int resp_code, const char* title)
+{
+	return add_response("%s %d %s\r\n", this->http_version, resp_code, title);
+}
+
+bool http_hander::add_response_header(int content_len)
+{
+	if(map_request_headers[CONTENT_TYPE])
+	{
+		if(!add_response("Content-Type:%s\r\n", map_request_headers[CONTENT_TYPE]))
+		{
+			return false;
+		}
+	}
+	if(map_request_headers[CONNECTION])
+	{
+		if(!add_response("Connection:%s\r\n", map_request_headers[CONTENT_TYPE]))
+		{
+			return false;
+		}
+	}
+	if(!add_response("Content-Length:%d\r\n", content_len))
+	{
+		return false;
+	}
+	return true;
+}
+
+bool http_hander::add_response_blank_line()
+{
+	return add_response("%s", "\r\n");
+}
+
+bool http_hander::add_response_content(const char* content)
+{
+	return add_response("%s", content);
+}
+		
+bool http_hander::add_response(const char* format, ...)
+{
+	if(idel_w_buffer_idx >= WRITE_BUFFER_SIZE)
+	{
+		return false;
+	}
+	va_list args_list;
+	va_start(args_list, format);
+	int len = vsnprintf(write_buffer + idel_w_buffer_idx, WRITE_BUFFER_SIZE - idel_w_buffer_idx - 1, 
+			format, args_list);
+	if(len >= (WRITE_BUFFER_SIZE - idel_w_buffer_idx - 1))
+	{
+		return false;
+	}
+	idel_w_buffer_idx += len;
+	va_end(args_list);
+	return true;
+}
 
 
 

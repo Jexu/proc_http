@@ -142,9 +142,9 @@ void thread_poll<T>::run()
 	{
 		if(work_queue.size() <=0)	
 		{
-		pthread_mutex_lock(&mutex);
-		pthread_cond_wait(&cond,&mutex);
-		pthread_mutex_unlock(&mutex);
+			pthread_mutex_lock(&mutex);
+			pthread_cond_wait(&cond,&mutex);
+			pthread_mutex_unlock(&mutex);
 			continue;
 		}
 		pthread_mutex_lock(&mutex);
