@@ -37,10 +37,31 @@ void http_hander::init(int socketfd, const struct sockaddr_in& addr)
 	this->init();
 }
 
+void http_hander::close_conn(bool is_close)
+{
+	if(is_close && (this->socketfd != -1))
+	{
+		eputil.remove_fd(epollfd, this->socketfd);
+		this->socketfd = -1;
+		user_counter--;
+	}
+}
+
 void* http_hander::process()
 {
-	std::cout<<"http_hander.process()"<<std::endl;
-	test();
+	HTTP_CODE resp_code = NO_REQUEST;
+	if((resp_code = process_request()) == NO_REQUEST)
+	{
+		eputil.modify_fd(epollfd, this->socketfd, EPOLLIN);
+		return NULL;
+	}
+
+	if(!process_response(resp_code))
+	{
+		close_conn();
+	}
+	eputil.modify_fd(epollfd, this->socketfd, EPOLLOUT);
+
 	return NULL;
 }
 
@@ -73,6 +94,49 @@ http_hander::READ_INTO_BUF_STATUS http_hander::read()
 
 bool http_hander::write()
 {
+	int byte_sent = 0;
+	int byte_to_send = idel_w_buffer_idx;
+	int byte_have_sent = 0;
+
+	if(byte_to_send == 0)
+	{
+		eputil.modify_fd(epollfd, this->socketfd, EPOLLIN);
+		init();
+		return true;
+	}
+
+	while(1)
+	{
+		byte_sent = writev(this->socketfd, iov, iovcnt);
+		if(byte_sent < 0)
+		{
+			if(errno == EAGAIN)
+			{
+				eputil.modify_fd(epollfd, this->socketfd, EPOLLOUT);
+				return true;
+			}
+			this->unmap();
+			return false;
+		}
+
+		byte_to_send -= byte_sent;
+		byte_have_sent += byte_sent;
+		if(byte_to_send <= 0)
+		{
+			this->unmap();
+			if(strcasecmp(map_request_headers[CONNECTION], "Keep-Alive") == 0)
+			{
+				init();
+				eputil.modify_fd(epollfd, this->socketfd, EPOLLIN);
+				return true;
+			}
+			else
+			{
+				eputil.modify_fd(epollfd, this->socketfd, EPOLLIN);
+				return false;
+			}
+		}
+	}
 	return true;
 }
 
@@ -335,312 +399,338 @@ http_hander::HTTP_CODE http_hander::parse_request_header(char* text)
 			}
 		case 'A':
 			{
-
-				if(strncasecmp(text, "accept:", 7) == 0)
-				{
-					text += 7;
-					text += strspn(text, "\t");
-					map_request_headers[ACCEPT] = text;
-				}
-				else
-				{
-					switch(text[7])
-					{
-						case 'C':
-							{
-								if(strncasecmp(text, "accept-charset:", 15) == 0)
-								{
-									text += 15;
-									text += strspn(text, "\t");
-									map_request_headers[ACCEPT_CHARSET] = text;
-								}
-								break;
-
-							}
-						case 'L':
-							{	
-								if(strncasecmp(text, "accept-language:", 16) == 0)
-								{
-									text += 16;
-									text += strspn(text, "\t");
-									map_request_headers[ACCEPT_LANGUAGE] = text;
-								}
-
-								break;
-							}
-						case 'E':
-							{	
-								if(strncasecmp(text, "accept-encoding:", 16) == 0)
-								{
-									text += 16;
-									text += strspn(text, "\t");
-									map_request_headers[ACCEPT_ENCODING] = text;
-								}
-
-								break;
-							}
-						case 'R':
-							{
-								if(strncasecmp(text, "accept-range:", 13) == 0)
-								{
-									text += 13;
-									text += strspn(text, "\t");
-									map_request_headers[ACCEPT_RANGE] = text;
-								}
-								break;
-							}
-						default:
-							{	
-								if(strncasecmp(text, "authorization:", 15) == 0)
-								{
-									text += 15;
-									text += strspn(text, "\t");
-									map_request_headers[AUTHORIZTION] = text;
-								}
-								break;
-							}
-					}
-				}
-
+				case_a(text);
 				break;
 			}
 		case 'C':
 			{
-				switch(text[3])
-				{
-					case 'n':
-						{
-							if(strncasecmp(text, "connection:", 11) == 0)
-							{
-								text += 11;
-								text += strspn(text, "\t");
-								map_request_headers[CONNECTION] = text;
-							}
-							break;
-						}
-					case 'k':
-						{
-							if(strncasecmp(text, "cookie:", 7) == 0)
-							{
-								text += 7;
-								text += strspn(text, "\t");
-								map_request_headers[COOKIE] = text;
-							}
-							break;
-						}
-					case 'h':
-						{
-							if(strncasecmp(text, "cache-control:", 14) == 0)
-							{
-								text += 14;
-								text += strspn(text, "\t");
-								map_request_headers[CACHE_CONTROL] = text;
-							}
-							break;
-						}
-					default:
-						{
-							if(strncasecmp(text, "content-length:", 16) == 0)
-							{
-								text += 16;
-								text += strspn(text, "\t");
-								map_request_headers[CONTENT_LENGTH] = text;
-							}
-							else if(strncasecmp(text, "content-type:", 13) == 0)
-							{
-								text += 13;
-								text += strspn(text, "\t");
-								map_request_headers[CONTENT_TYPE] = text;
-							}
-							break;
-						}
-
-				}
-
+				case_c(text);
 				break;
 			}
 		case 'U':
 			{
-
-				if(strncasecmp(text, "user-agent:", 11) == 0)
-				{
-					text += 11;
-					text += strspn(text, "\t");
-					map_request_headers[USER_AGENT] = text;
-				}
-				else if(strncasecmp(text, "upgrade:", 8) == 0)
-				{
-					text += 8; 
-					text += strspn(text, "\t");
-					map_request_headers[UPGRADE] = text;
-				}
-
-
+				case_u(text);
 				break;
 			}
 		case 'H':
 			{
+				case_h(text);
+				break;
+			}
+		case 'R':
+			{
+				case_r(text);
+				break;
+			}
+		case 'I':
+			{
+				case_i(text);
+				break;
+			}
+		default:
+			{
+				case_default(text);
+				break;
+			}
+	}
+	return NO_REQUEST;
+}
 
-				if(strncasecmp(text, "host:", 5) == 0)
+
+void http_hander::case_a(char* text)
+{
+	if(strncasecmp(text, "accept:", 7) == 0)
+	{
+		text += 7;
+		text += strspn(text, "\t");
+		map_request_headers[ACCEPT] = text;
+	}
+	else
+	{
+		switch(text[7])
+		{
+			case 'C':
 				{
-					text +=	5; 
+					if(strncasecmp(text, "accept-charset:", 15) == 0)
+					{
+						text += 15;
+						text += strspn(text, "\t");
+						map_request_headers[ACCEPT_CHARSET] = text;
+					}
+					break;
+
+				}
+			case 'L':
+				{	
+					if(strncasecmp(text, "accept-language:", 16) == 0)
+					{
+						text += 16;
+						text += strspn(text, "\t");
+						map_request_headers[ACCEPT_LANGUAGE] = text;
+					}
+
+					break;
+				}
+			case 'E':
+				{	
+					if(strncasecmp(text, "accept-encoding:", 16) == 0)
+					{
+						text += 16;
+						text += strspn(text, "\t");
+						map_request_headers[ACCEPT_ENCODING] = text;
+					}
+
+					break;
+				}
+			case 'R':
+				{
+					if(strncasecmp(text, "accept-range:", 13) == 0)
+					{
+						text += 13;
+						text += strspn(text, "\t");
+						map_request_headers[ACCEPT_RANGE] = text;
+					}
+					break;
+				}
+			default:
+				{	
+					if(strncasecmp(text, "authorization:", 15) == 0)
+					{
+						text += 15;
+						text += strspn(text, "\t");
+						map_request_headers[AUTHORIZTION] = text;
+					}
+					break;
+				}
+		}
+	}
+}
+
+void http_hander::case_c(char* text)
+{
+	switch(text[3])
+	{
+		case 'n':
+			{
+				if(strncasecmp(text, "connection:", 11) == 0)
+				{
+					text += 11;
 					text += strspn(text, "\t");
-					map_request_headers[HOST] = text;
+					map_request_headers[CONNECTION] = text;
+				}
+				break;
+			}
+		case 'k':
+			{
+				if(strncasecmp(text, "cookie:", 7) == 0)
+				{
+					text += 7;
+					text += strspn(text, "\t");
+					map_request_headers[COOKIE] = text;
+				}
+				break;
+			}
+		case 'h':
+			{
+				if(strncasecmp(text, "cache-control:", 14) == 0)
+				{
+					text += 14;
+					text += strspn(text, "\t");
+					map_request_headers[CACHE_CONTROL] = text;
+				}
+				break;
+			}
+		default:
+			{
+				if(strncasecmp(text, "content-length:", 16) == 0)
+				{
+					text += 16;
+					text += strspn(text, "\t");
+					map_request_headers[CONTENT_LENGTH] = text;
+				}
+				else if(strncasecmp(text, "content-type:", 13) == 0)
+				{
+					text += 13;
+					text += strspn(text, "\t");
+					map_request_headers[CONTENT_TYPE] = text;
+				}
+				break;
+			}
+
+	}
+}
+
+void http_hander::case_u(char* text)
+{
+	if(strncasecmp(text, "user-agent:", 11) == 0)
+	{
+		text += 11;
+		text += strspn(text, "\t");
+		map_request_headers[USER_AGENT] = text;
+	}
+	else if(strncasecmp(text, "upgrade:", 8) == 0)
+	{
+		text += 8; 
+		text += strspn(text, "\t");
+		map_request_headers[UPGRADE] = text;
+	}
+}
+
+void http_hander::case_h(char* text)
+{
+	if(strncasecmp(text, "host:", 5) == 0)
+	{
+		text +=	5; 
+		text += strspn(text, "\t");
+		map_request_headers[HOST] = text;
+	}
+
+}
+
+void http_hander::case_r(char* text)
+{
+	if(strncasecmp(text, "range:", 6) == 0)
+	{
+		text += 6; 
+		text += strspn(text, "\t");
+		map_request_headers[RANGE] = text;
+	}
+	else if(strncasecmp(text, "referer:", 8) == 0)
+	{
+		text += 8;
+		text += strspn(text, "\t");
+		map_request_headers[REFERER] = text;
+	}
+}
+
+void http_hander::case_i(char* text)
+{
+	switch(text[3])
+	{
+		case 'M':
+			{
+				if(strncasecmp(text, "if-match:", 9) == 0)
+				{
+					text += 9; 
+					text += strspn(text, "\t");
+					map_request_headers[IF_MATCH] = text;
+				}
+				else if(strncasecmp(text, "if-modified-since:", 18) == 0)
+				{
+					text += 18;
+					text += strspn(text, "\t");
+					map_request_headers[IF_MODIFIED_SINCE] = text;
+				}
+				break;
+			}
+		case 'N':
+			{
+				if(strncasecmp(text, "if-none-match:", 14) == 0)
+				{
+					text += 14; 
+					text += strspn(text, "\t");
+					map_request_headers[IF_NONE_MATCH] = text;
 				}
 				break;
 			}
 		case 'R':
 			{
-				if(strncasecmp(text, "range:", 6) == 0)
+				if(strncasecmp(text, "if-range:", 9) == 0)
 				{
-					text += 6; 
+					text += 9; 
 					text += strspn(text, "\t");
-					map_request_headers[RANGE] = text;
+					map_request_headers[IF_RANGE] = text;
 				}
-				else if(strncasecmp(text, "referer:", 8) == 0)
-				{
-					text += 8;
-					text += strspn(text, "\t");
-					map_request_headers[REFERER] = text;
-				}
-
-				break;
-			}
-		case 'I':
-			{
-				switch(text[3])
-				{
-					case 'M':
-						{
-							if(strncasecmp(text, "if-match:", 9) == 0)
-							{
-								text += 9; 
-								text += strspn(text, "\t");
-								map_request_headers[IF_MATCH] = text;
-							}
-							else if(strncasecmp(text, "if-modified-since:", 18) == 0)
-							{
-								text += 18;
-								text += strspn(text, "\t");
-								map_request_headers[IF_MODIFIED_SINCE] = text;
-							}
-							break;
-						}
-					case 'N':
-						{
-							if(strncasecmp(text, "if-none-match:", 14) == 0)
-							{
-								text += 14; 
-								text += strspn(text, "\t");
-								map_request_headers[IF_NONE_MATCH] = text;
-							}
-							break;
-						}
-					case 'R':
-						{
-							if(strncasecmp(text, "if-range:", 9) == 0)
-							{
-								text += 9; 
-								text += strspn(text, "\t");
-								map_request_headers[IF_RANGE] = text;
-							}
-							break;
-						}
-					default:
-						{
-							if(strncasecmp(text, "if-unmodified-since:", 20) == 0)
-							{
-								text += 20;
-								text += strspn(text, "\t");
-								map_request_headers[IF_UNMODIFIED_SINCE] = text;
-							}
-							break;
-						}
-				}
-
-
 				break;
 			}
 		default:
 			{
-				switch(text[1])
+				if(strncasecmp(text, "if-unmodified-since:", 20) == 0)
 				{
-					case 'a':
-						{
-							if(strncasecmp(text, "date:", 5) == 0)
-							{
-								text += 5;
-								text += strspn(text, "\t");
-								map_request_headers[DATE] = text;
-							}
-							else if(strncasecmp(text, "max-forwards:", 13) == 0)
-							{
-								text += 13;
-								text += strspn(text, "\t");
-								map_request_headers[MAX_FORWARDS] = text;
-							}
-							else if(strncasecmp(text, "warning:", 8) == 0)
-							{
-								text += 8;
-								text += strspn(text, "\t");
-								map_request_headers[WARING] = text;
-							}
-							break;
-						}
-					case 'x':
-						{
-							if(strncasecmp(text, "expect:", 7) == 0)
-							{
-								text += 7;
-								text += strspn(text, "\t");
-								map_request_headers[EXPECT] = text;
-							}
-							break;
-						}
-					case 'r':
-						{
-							if(strncasecmp(text, "from:", 5) == 0)
-							{
-								text += 5;
-								text += strspn(text, "\t");
-								map_request_headers[FROM] = text;
-							}
-							else if(strncasecmp(text, "pragma:", 7) == 0)
-							{
-								text += 7;
-								text += strspn(text, "\t");
-								map_request_headers[PRAGMA] = text;
-							}
-							else if(strncasecmp(text, "proxy-authorization:", 21) == 0)
-							{
-								text +=	21; 
-								text += strspn(text, "\t");
-								map_request_headers[PROXY_AUTHORIZATION] = text;
-							}
-							break;
-						}
-					default:
-						{
-							if(strncasecmp(text, "te:", 3) == 0)
-							{
-								text += 3; 
-								text += strspn(text, "\t");
-								map_request_headers[TE] = text;
-							}
-							else if(strncasecmp(text, "via:", 4) == 0)
-							{
-								text += 4; 
-								text += strspn(text, "\t");
-								map_request_headers[VIA] = text;
-							}
-						}
-						break;
+					text += 20;
+					text += strspn(text, "\t");
+					map_request_headers[IF_UNMODIFIED_SINCE] = text;
 				}
 				break;
 			}
 	}
+}
 
-	return NO_REQUEST;
+void http_hander::case_default(char* text)
+{
+	switch(text[1])
+	{
+		case 'a':
+			{
+				if(strncasecmp(text, "date:", 5) == 0)
+				{
+					text += 5;
+					text += strspn(text, "\t");
+					map_request_headers[DATE] = text;
+				}
+				else if(strncasecmp(text, "max-forwards:", 13) == 0)
+				{
+					text += 13;
+					text += strspn(text, "\t");
+					map_request_headers[MAX_FORWARDS] = text;
+				}
+				else if(strncasecmp(text, "warning:", 8) == 0)
+				{
+					text += 8;
+					text += strspn(text, "\t");
+					map_request_headers[WARING] = text;
+				}
+				break;
+			}
+		case 'x':
+			{
+				if(strncasecmp(text, "expect:", 7) == 0)
+				{
+					text += 7;
+					text += strspn(text, "\t");
+					map_request_headers[EXPECT] = text;
+				}
+				break;
+			}
+		case 'r':
+			{
+				if(strncasecmp(text, "from:", 5) == 0)
+				{
+					text += 5;
+					text += strspn(text, "\t");
+					map_request_headers[FROM] = text;
+				}
+				else if(strncasecmp(text, "pragma:", 7) == 0)
+				{
+					text += 7;
+					text += strspn(text, "\t");
+					map_request_headers[PRAGMA] = text;
+				}
+				else if(strncasecmp(text, "proxy-authorization:", 21) == 0)
+				{
+					text +=	21; 
+					text += strspn(text, "\t");
+					map_request_headers[PROXY_AUTHORIZATION] = text;
+				}
+				break;
+			}
+		default:
+			{
+				if(strncasecmp(text, "te:", 3) == 0)
+				{
+					text += 3; 
+					text += strspn(text, "\t");
+					map_request_headers[TE] = text;
+				}
+				else if(strncasecmp(text, "via:", 4) == 0)
+				{
+					text += 4; 
+					text += strspn(text, "\t");
+					map_request_headers[VIA] = text;
+				}
+			}
+			break;
+	}
 }
 
 http_hander::HTTP_CODE http_hander::parse_request_content(char* text)
@@ -846,7 +936,7 @@ bool http_hander::add_response_content(const char* content)
 {
 	return add_response("%s", content);
 }
-		
+
 bool http_hander::add_response(const char* format, ...)
 {
 	if(idel_w_buffer_idx >= WRITE_BUFFER_SIZE)
@@ -866,30 +956,20 @@ bool http_hander::add_response(const char* format, ...)
 	return true;
 }
 
-
-
-
-
-
-
-
-
-
-void http_hander::test()
+bool http_hander::unmap()
 {
-	std::vector<std::string> splits;
-	std::string src("version:111:go");
-	_split(&src,(char*)":",&splits);
-	for(unsigned int i = 0; i < splits.size(); i++)
+	if(request_file_mmap_addr)
 	{
-		std::cout<<splits[i]<<"  "<<std::endl;
+		int ret = munmap(request_file_mmap_addr, request_file_stat.st_size);
+		if(ret == 0)
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
 	}
-	splits.clear();
-	std::string _src = "bal_ka_hg_";
-	_split(&_src,(char*)"_",&splits);
-	for(unsigned int i = 0; i < splits.size(); i++)
-	{
-		std::cout<<splits[i]<<"  "<<std::endl;
-	}
-
+	return false;
 }
+

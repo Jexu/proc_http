@@ -107,9 +107,18 @@ class http_hander : public _hander
 		bool process_response(HTTP_CODE resp_code);
 		bool add_response_line(int resp_code, const char* title);
 		bool add_response_header(int content_len);
+		void case_a(char* text);
+		void case_c(char* text);
+		void case_u(char* text);
+		void case_h(char* text);
+		void case_r(char* text);
+		void case_i(char* text);
+		void case_default(char* text);
 		bool add_response_blank_line();
 		bool add_response_content(const char* content);
 		bool add_response(const char* format, ...);
+
+		bool unmap();
 
 		/*function _split is applied to split string and result will be stored 
 		 *into arg splits*/
@@ -117,7 +126,6 @@ class http_hander : public _hander
 				std::vector<std::string>* splits)const;
 		void _split(const char *src,const char* sp,
 				std::vector<std::string>* splits)const;
-		void test();
 	private:
 		/*save the socketfd accept() returned*/
 		int socketfd;
