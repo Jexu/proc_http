@@ -19,8 +19,8 @@ template<typename T>
 class thread_poll
 {
 	public:
-		/*in this constructor, default value of th_number and max_requests are 10 and 10000*/
-		thread_poll(int th_number = 10, int max_requests = 10000);
+		/*in this constructor, default value of th_number and max_requests are 5 and 10000*/
+		thread_poll(int th_number = 5, int max_requests = 10000);
 		/*arg request represents a specific task class with necessary function named process() */
 		bool append_request(T *request);
 		~thread_poll();
